@@ -147,7 +147,7 @@ void checkClientWatchdog() {
     return;
   }
   if ((millis() - lastWatchdogKick) >= CLIENT_WATCHDOG_TIMEOUT_MILLIS) {
-    ESP_LOGI("Watchdog expired");
+    ESP_LOGI(TAG, "Watchdog expired");
     client.println("error: watchdog expired");
     client.stop();
     watchdogEnabled = 0;
@@ -227,7 +227,7 @@ int stepOnewireThermoBus() {
 }
 
 void setup() {
-  ESP_LOGI("Starting setup ...");
+  ESP_LOGI(TAG, "Starting setup ...");
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
   Serial.println(WiFi.localIP());
@@ -271,19 +271,19 @@ void getThermoStatus(String* statusMessage) {
 }
 
 void handleCommand(char *command) {
-  ESP_LOGI("Handling command: \"%s\" ...", command);
+  // ESP_LOGI(TAG, "Handling command: %s ...", command);
   String commandString = String(command);
   if (commandString.equals(COMMAND_WATCHDOG_ON)) {
-    ESP_LOGI("Enabling watchdog.");
+    ESP_LOGI(TAG, "Enabling watchdog.");
     enableClientWatchdog();
   } else if (commandString.equals(COMMAND_WATCHDOG_OFF)) {
-    ESP_LOGI("Disabling watchdog.");
+    ESP_LOGI(TAG, "Disabling watchdog.");
     disableClientWatchdog();
   } else if (commandString.equals(COMMAND_WATCHDOG_KICK)) {
-    ESP_LOGI("Watchdog kicked.");
+    ESP_LOGI(TAG, "Watchdog kicked.");
     kickClientWatchdog();
   } else {
-    ESP_LOGI("Unknown command");
+    ESP_LOGI(TAG, "Unknown command");
   }
 }
 
@@ -319,7 +319,7 @@ void serviceCurrentClient() {
 
     // Haven't received a complete command & about to overflow.
     if (clientBufferPos == (TCP_CLIENT_INCOMING_BUFSIZE - 1)) {
-      ESP_LOGI("Incoming buffer overflow");
+      ESP_LOGI(TAG, "Incoming buffer overflow");
       clientBufferPos = 0;
     }
   }
@@ -337,7 +337,7 @@ void checkAndServiceTcp() {
   if (!client.connected()) {
     client = server.available();
     if (client.connected()) {
-      ESP_LOGI("TCP client connectd");
+      ESP_LOGI(TAG, "TCP client connectd");
       watchdogEnabled = 0;
       client.print("info: kegboard-particle device_id=");
       client.print(WiFi.macAddress());
