@@ -20,7 +20,7 @@
 
 #include <inttypes.h>
 #include "ds1820.h"
-#include "OneWire.h"
+#include <OneWire.h>
 
 #define REFRESH_MS    5000
 

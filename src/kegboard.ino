@@ -33,41 +33,36 @@
 #define COMMAND_WATCHDOG_KICK "watchdog kick"
 
 #define NUM_METERS 4
-#define METER0_PIN D1
-#define METER1_PIN D2
-#define METER2_PIN D3
-#define METER3_PIN D4
+#define METER0_PIN 36
+#define METER1_PIN 39
+#define METER2_PIN 34
+#define METER3_PIN 35
 
-#define ONEWIRE_PIN D5
+#define ONEWIRE_PIN 32
 
 #define TCP_SERVER_PORT 8321
 #define TCP_CLIENT_INCOMING_BUFSIZE 256
 
-#include "MDNS.h"
-#include "OneWire.h"
-#include "ds1820.h"
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <OneWire.h>
+#include <ds1820.h>
 
 #if KEGBOARD_DEBUG
 SerialLogHandler logHandler;
 #endif
 
-TCPServer server = TCPServer(TCP_SERVER_PORT);
-TCPClient client;
+WiFiServer server(TCP_SERVER_PORT);
+WiFiClient client;
 
 char clientBuffer[TCP_CLIENT_INCOMING_BUFSIZE] = { '\0' };
 unsigned int clientBufferPos = 0;
-
-mdns::MDNS mdnsImpl;
-bool mdnsRunning = false;
 
 volatile unsigned int watchdogEnabled = 0;
 unsigned long lastWatchdogKick;
 
 volatile unsigned int meterPending;
 volatile unsigned int thermoPending;
-
-volatile unsigned int cloudPending;
-unsigned long lastCloudPublishMillis;
 
 volatile unsigned int consolePending;
 unsigned long lastConsolePublishMillis;
@@ -92,10 +87,10 @@ typedef struct {
 temp_t temps[NUM_METERS];
 
 #define CREATE_METER_ISR(METER_NUM) \
-  void meter##METER_NUM##Interrupt(void) { \
+  void IRAM_ATTR meter##METER_NUM##Interrupt(void) { \
     detachInterrupt(METER##METER_NUM##_PIN); \
     meters[METER_NUM].ticks++; \
-    cloudPending = consolePending = tcpPending = meterPending = 1; \
+    consolePending = tcpPending = meterPending = 1; \
     attachInterrupt(METER##METER_NUM##_PIN, meter##METER_NUM##Interrupt, FALLING); \
   }
 
@@ -128,19 +123,6 @@ int resetMeter(int meterNum) {
   return 0;
 }
 
-int publicResetMeter(String extra) {
-  int meterNum = atoi(extra);
-  return resetMeter(meterNum);
-}
-
-int publicMeterTicks(String extra) {
-  int meterNum = atoi(extra);
-  if (meterNum < 0 || meterNum >= NUM_METERS) {
-    return -1;
-  }
-  return (int) meters[meterNum].ticks;
-}
-
 void enableClientWatchdog() {
   lastWatchdogKick = millis();
   watchdogEnabled = 1;
@@ -165,22 +147,11 @@ void checkClientWatchdog() {
     return;
   }
   if ((millis() - lastWatchdogKick) >= CLIENT_WATCHDOG_TIMEOUT_MILLIS) {
-    Log.info("Watchdog expired");
+    ESP_LOGI("Watchdog expired");
     client.println("error: watchdog expired");
     client.stop();
     watchdogEnabled = 0;
   }
-}
-
-bool setupMdns() {
-  std::vector<String> subServices;
-  subServices.push_back("kegboard");
-
-  bool success = mdnsImpl.setHostname("kegboard") &&
-    mdnsImpl.addService("tcp", "kegboard", TCP_SERVER_PORT, "Kegboard") &&
-    mdnsImpl.begin(true);
-
-  return success;
 }
 
 void addTemperature(char* probe, float temp) {
@@ -216,7 +187,7 @@ int stepOnewireThermoBus() {
       thermoSensor.GetName(nameBuf);
       if (buf[0] != '\0') {
         addTemperature(nameBuf,atof(buf));
-        cloudPending = consolePending = tcpPending = thermoPending = 1;
+        consolePending = tcpPending = thermoPending = 1;
       }
       thermoSensor.Reset();
     } else if (thermoSensor.Busy()) {
@@ -256,7 +227,7 @@ int stepOnewireThermoBus() {
 }
 
 void setup() {
-  Log.info("Starting setup ...");
+  ESP_LOGI("Starting setup ...");
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
   Serial.println(WiFi.localIP());
@@ -273,42 +244,46 @@ void setup() {
   SETUP_TEMP(2);
   SETUP_TEMP(3);
 
-  Particle.function("resetMeter", publicResetMeter);
-  Particle.function("meterTicks", publicMeterTicks);
-
-  mdnsRunning = setupMdns();
+  MDNS.begin("kegboard");
+  MDNS.addService("kegboard", "tcp", TCP_SERVER_PORT);
 }
 
 void getStatus(String* statusMessage) {
   for (int i = 0; i < NUM_METERS; i++) {
     meter_t *meter = &meters[i];
     unsigned int ticks = meter->ticks;
-    statusMessage->concat(String::format("meter%i.ticks=%u ", i, ticks));
+    statusMessage->concat("meter");
+    statusMessage->concat(i);
+    statusMessage->concat(".ticks=");
+    statusMessage->concat(ticks);
   }
 }
 
 void getThermoStatus(String* statusMessage) {
   for (int i = 0; i < NUM_METERS; i++) {
     if (temps[i].probe[0] != '\0') {
-      statusMessage->concat(String::format("temp_%s.temp=%f ", temps[i].probe, temps[i].temp));
+      statusMessage->concat("temp_");
+      statusMessage->concat(temps[i].probe);
+      statusMessage->concat(".temp=");
+      statusMessage->concat(temps[i].temp);
     }
   }
 }
 
 void handleCommand(char *command) {
-  Log.info("Handling command: \"%s\" ...", command);
+  ESP_LOGI("Handling command: \"%s\" ...", command);
   String commandString = String(command);
   if (commandString.equals(COMMAND_WATCHDOG_ON)) {
-    Log.info("Enabling watchdog.");
+    ESP_LOGI("Enabling watchdog.");
     enableClientWatchdog();
   } else if (commandString.equals(COMMAND_WATCHDOG_OFF)) {
-    Log.info("Disabling watchdog.");
+    ESP_LOGI("Disabling watchdog.");
     disableClientWatchdog();
   } else if (commandString.equals(COMMAND_WATCHDOG_KICK)) {
-    Log.info("Watchdog kicked.");
+    ESP_LOGI("Watchdog kicked.");
     kickClientWatchdog();
   } else {
-    Log.info("Unknown command");
+    ESP_LOGI("Unknown command");
   }
 }
 
@@ -344,7 +319,7 @@ void serviceCurrentClient() {
 
     // Haven't received a complete command & about to overflow.
     if (clientBufferPos == (TCP_CLIENT_INCOMING_BUFSIZE - 1)) {
-      Log.info("Incoming buffer overflow");
+      ESP_LOGI("Incoming buffer overflow");
       clientBufferPos = 0;
     }
   }
@@ -362,10 +337,10 @@ void checkAndServiceTcp() {
   if (!client.connected()) {
     client = server.available();
     if (client.connected()) {
-      Log.info("TCP client connectd");
+      ESP_LOGI("TCP client connectd");
       watchdogEnabled = 0;
       client.print("info: kegboard-particle device_id=");
-      client.print(System.deviceID());
+      client.print(WiFi.macAddress());
       client.print(" version=");
       client.print(VERSION);
       client.println();
@@ -374,30 +349,6 @@ void checkAndServiceTcp() {
 
   if (client.connected()) {
     serviceCurrentClient();
-  }
-}
-
-void publishCloudStatus() {
-  if (!cloudPending) {
-    return;
-  }
-  cloudPending = 0;
-
-  String statusMessage;
-  if (meterPending) {
-    getStatus(&statusMessage);
-    bool published = Particle.publish("kb-status", statusMessage, PRIVATE);
-    if (published) {
-      lastCloudPublishMillis = millis();
-    }
-  }
-  if (thermoPending) {
-    statusMessage = "";
-    getThermoStatus(&statusMessage);
-    bool published = Particle.publish("kb-thermo", statusMessage, PRIVATE);
-    if (published) {
-      lastCloudPublishMillis = millis();
-    }
   }
 }
 
@@ -449,17 +400,10 @@ void loop() {
   checkAndServiceTcp();
   stepOnewireThermoBus();
 
-  if (mdnsRunning) {
-    mdnsImpl.processQueries();
-  }
-
   if (client.connected()) {
     if ((millis() - lastTcpPublishMillis) >= TCP_PUBLISH_INTERVAL_MILLIS) {
       publishTcpStatus();
     }
-  }
-  if ((millis() - lastCloudPublishMillis) >= CLOUD_PUBLISH_INTERVAL_MILLIS) {
-    publishCloudStatus();
   }
 
   if ((millis() - lastConsolePublishMillis) >= CONSOLE_PUBLISH_INTERVAL_MILLIS) {
