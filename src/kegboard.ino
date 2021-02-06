@@ -47,6 +47,7 @@
 #include <ESPmDNS.h>
 #include <OneWire.h>
 #include <ds1820.h>
+#include <Preferences.h>
 
 #if KEGBOARD_DEBUG
 SerialLogHandler logHandler;
@@ -54,6 +55,7 @@ SerialLogHandler logHandler;
 
 WiFiServer server(TCP_SERVER_PORT);
 WiFiClient client;
+Preferences prefs;
 
 char clientBuffer[TCP_CLIENT_INCOMING_BUFSIZE] = { '\0' };
 unsigned int clientBufferPos = 0;
@@ -229,6 +231,30 @@ int stepOnewireThermoBus() {
 void setup() {
   ESP_LOGI(TAG, "Starting setup ...");
   Serial.begin(115200);
+
+  prefs.begin("wifi");
+  if (prefs.getBool("sc", true)) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.beginSmartConfig();
+
+    ESP_LOGI(TAG, "Waiting for WiFi SmartConfig...");
+    while (!WiFi.smartConfigDone()) {
+      delay(500);
+    }
+    ESP_LOGI(TAG, "SmartConfig received.");
+    prefs.putString("ssid", WiFi.SSID());
+    prefs.putString("psk", WiFi.psk());
+    prefs.putBool("sc", false);
+  } else {
+    WiFi.begin(prefs.getString("ssid").c_str(), prefs.getString("psk").c_str());
+  }
+  prefs.end();
+
+  ESP_LOGI(TAG, "Connecting...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+  }
+
   Serial.print("start: kegboard-particle online, ip: ");
   Serial.println(WiFi.localIP());
 
