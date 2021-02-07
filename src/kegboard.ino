@@ -44,10 +44,11 @@
 #define TCP_CLIENT_INCOMING_BUFSIZE 256
 
 #include <WiFi.h>
+#include <WiFiProv.h>
+#include <SimpleBLE.h>
 #include <ESPmDNS.h>
 #include <OneWire.h>
 #include <ds1820.h>
-#include <Preferences.h>
 
 #if KEGBOARD_DEBUG
 SerialLogHandler logHandler;
@@ -55,7 +56,7 @@ SerialLogHandler logHandler;
 
 WiFiServer server(TCP_SERVER_PORT);
 WiFiClient client;
-Preferences prefs;
+SimpleBLE ble;
 
 char clientBuffer[TCP_CLIENT_INCOMING_BUFSIZE] = { '\0' };
 unsigned int clientBufferPos = 0;
@@ -228,29 +229,53 @@ int stepOnewireThermoBus() {
   return 1;
 }
 
+void SysProvEvent(system_event_t *sys_event, wifi_prov_event_t *prov_event) {
+  if (sys_event) {
+    switch (sys_event->event_id) {
+      case SYSTEM_EVENT_STA_GOT_IP:
+        ESP_LOGI(TAG, "Got IP address");
+        break;
+      case SYSTEM_EVENT_STA_DISCONNECTED:
+        ESP_LOGI(TAG, "Disconnected.");
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (prov_event) {
+    switch (prov_event->event) {
+      case WIFI_PROV_START:
+        ESP_LOGI(TAG, "Provisioning started...");
+        break;
+      case WIFI_PROV_CRED_RECV:
+        ESP_LOGI(TAG, "Received wifi creds");
+        break;
+      case WIFI_PROV_CRED_FAIL:
+        ESP_LOGW(TAG, "Provisioning failed");
+        break;
+      case WIFI_PROV_CRED_SUCCESS:
+        ESP_LOGI(TAG, "Provisioning successful");
+        break;
+      case WIFI_PROV_END:
+        ESP_LOGI(TAG, "Provisioning ends");
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void setup() {
   ESP_LOGI(TAG, "Starting setup ...");
   Serial.begin(115200);
 
-  prefs.begin("wifi");
-  if (prefs.getBool("sc", true)) {
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.beginSmartConfig();
+  uint8_t uuid[16] = {0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+                      0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02 };
+  WiFi.onEvent(SysProvEvent);
+  WiFiProv.beginProvision(provSchemeBLE, WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM, WIFI_PROV_SECURITY_1, "abcd1234", "PROV_XXX", NULL, uuid);
+  wifi_prov_mgr_wait();
 
-    ESP_LOGI(TAG, "Waiting for WiFi SmartConfig...");
-    while (!WiFi.smartConfigDone()) {
-      delay(500);
-    }
-    ESP_LOGI(TAG, "SmartConfig received.");
-    prefs.putString("ssid", WiFi.SSID());
-    prefs.putString("psk", WiFi.psk());
-    prefs.putBool("sc", false);
-  } else {
-    WiFi.begin(prefs.getString("ssid").c_str(), prefs.getString("psk").c_str());
-  }
-  prefs.end();
-
-  ESP_LOGI(TAG, "Connecting...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
   }
@@ -282,6 +307,7 @@ void getStatus(String* statusMessage) {
     statusMessage->concat(i);
     statusMessage->concat(".ticks=");
     statusMessage->concat(ticks);
+    statusMessage->concat(" ");
   }
 }
 
@@ -292,6 +318,7 @@ void getThermoStatus(String* statusMessage) {
       statusMessage->concat(temps[i].probe);
       statusMessage->concat(".temp=");
       statusMessage->concat(temps[i].temp);
+      statusMessage->concat(" ");
     }
   }
 }
